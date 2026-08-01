@@ -16,7 +16,7 @@ The project includes:
 ### Clone the repository
 
 ```bash
-git clone <https://github.com/Sama-venu/enterprisebot-devops-assignment.git>
+git clone https://github.com/Sama-venu/enterprisebot-devops-assignment.git
 cd enterprisebot
 ```
 
