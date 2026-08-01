@@ -1,155 +1,149 @@
-# Part 4 - Findings
+This repository contains my solution for the Enterprise Bot DevOps assignment.
 
-I was able to identify and fix a few issues in the broken Helm chart within the time limit. While working on it, I tried to fix one problem at a time instead of changing multiple things together. After every fix I redeployed the chart and checked how the behavior changed before moving to the next issue.
+The project includes:
 
----
-
-## Defect 1
-
-### Symptom
-
-After deploying the chart, not all workloads were coming up successfully. Some pods were failing to start properly and `./scenario.sh verify` was already showing multiple failures.
-
-### Cause
-
-The Deployment templates were using an incorrect `runAsUser` value in the security context. Because of that, the containers were not starting correctly.
-
-### Fix
-
-Updated the `securityContext` in the affected deployment YAML files and changed the `runAsUser` value to the correct non-root user.
-
-### How I found it
-
-I first checked the pod status.
-
-```bash
-kubectl get pods -n debug-lab
-```
-
-Then I looked at the pod events and logs.
-
-```bash
-kubectl describe pod <pod-name> -n debug-lab
-kubectl logs <pod-name> -n debug-lab
-```
-
-The pod events were pointing to a startup issue, so I checked the deployment YAMLs and noticed the security context configuration. After updating it and deploying again, those pods started normally.
+- Part 1 - Containerized Python service
+- Part 2 - Helm chart
+- Part 3 - One-command setup using Kind
+- Part 4 - Kubernetes debugging lab
+- Part 5 - Written question
+- part 6 - How to verify my work
 
 ---
 
-## Defect 2
+# How to run
 
-### Symptom
+### Clone the repository
 
-The reporter pod was still not becoming Ready even though the container was running.
-
-The logs showed:
-
-```
-eb-debug-app 2.0.0 starting...
-listening on :8081
+```bash
+git clone <https://github.com/Sama-venu/enterprisebot-devops-assignment.git>
+cd enterprisebot
 ```
 
-But the readiness probe was checking port 8080.
+### Run the setup
 
-### Cause
+```bash
+chmod +x setup.sh
+./setup.sh
+```
 
-The application image listens on port 8081 by default. Since the `PORT` environment variable was not set, the application never listened on port 8080, so the readiness probe kept failing.
+The script will:
 
-### Fix
+- Create (or reuse) a Kind cluster named `demo`
+- Install ingress-nginx
+- Build the application image
+- Load the image into Kind
+- Deploy the Helm chart into namespace `demo`
 
-Added the following environment variable to the reporter deployment.
+The script can be executed multiple times without failing.
+
+---
+
+# How to verify
+
+Check that all pods are running.
+
+```bash
+kubectl get pods -n demo
+```
+
+Check the service.
+
+```bash
+kubectl get svc -n demo
+```
+
+Verify the application.
+
+```bash
+kubectl port-forward svc/demo 8080:80 -n demo
+```
+
+Then open
+
+```
+http://localhost:8080/
+```
+
+or
+
+```bash
+curl http://localhost:8080/
+```
+
+Health endpoint
+
+```bash
+curl http://localhost:8080/healthz
+```
+
+---
+
+# Resource requests and limits
+
+I kept the resource values small because this assignment runs on a local Kind cluster and the application itself is lightweight.
+
+Current values:
 
 ```yaml
-- name: PORT
-  value: "8080"
+requests:
+  cpu: 100m
+  memory: 128Mi
+
+limits:
+  cpu: 200m
+  memory: 256Mi
 ```
 
-### How I found it
+These values are enough for a simple HTTP application while still allowing Kubernetes to schedule the pods properly.
 
-I checked the pod description first because the pod was staying in 0/1 Ready.
-
-```bash
-kubectl describe pod reporter-<pod> -n debug-lab
-```
-
-The readiness probe was continuously failing, so I checked the container logs.
-
-```bash
-kubectl logs reporter-<pod> -n debug-lab
-```
-
-The logs clearly showed the application was listening on port 8081 instead of 8080, so I added the missing environment variable and deployed the chart again.
+For a real production application, I would not simply guess these numbers. I would collect CPU and memory usage over time using Prometheus or another monitoring tool and then tune the requests and limits based on actual usage.
 
 ---
 
-## Defect 3
+# What I deliberately skipped
 
-### Symptom
+Because of the time limit, I decided not to spend extra time adding features that were not required by the assignment.
 
-After fixing the port issue, the reporter pod was still not becoming Ready.
+I also could not finish all the issues in the debugging lab. I fixed a few defects and documented my investigation, but I stopped once the assignment time was over instead of continuing until every check passed.
 
-This time the logs showed:
+I also skipped things like:
 
-```
-pods is forbidden:
-User "system:serviceaccount:debug-lab:reporter"
-cannot list resource "pods"
-```
+- Horizontal Pod Autoscaler
+- Network Policies
+- PodDisruptionBudget
+- External Secrets
+- CI/CD pipeline
 
-### Cause
-
-The reporter ServiceAccount did not have permission to list pods.
-
-There was already an RBAC configuration, but it was bound to the default ServiceAccount instead of the reporter ServiceAccount.
-
-### Fix
-
-Created a Role and RoleBinding for the reporter ServiceAccount and granted permission to get and list pods.
-
-I also verified the permission using:
-
-```bash
-kubectl auth can-i list pods \
---as=system:serviceaccount:debug-lab:reporter \
--n debug-lab
-```
-
-The output returned:
-
-```
-yes
-```
-
-### How I found it
-
-Once the port issue was fixed, the error changed completely. Instead of connection refused, I started getting HTTP 403 errors in the logs.
-
-That told me the application itself was running now, but it didn't have enough permissions to talk to the Kubernetes API.
-
-I checked the ServiceAccount, Role and RoleBinding resources, fixed the RoleBinding, redeployed the chart and verified the permissions using `kubectl auth can-i`.
+The risk of skipping these is that the deployment is good enough for a demo environment, but it is not ready for a production workload.
 
 ---
 
-## Remaining Issues
+# What I would change for production
 
-After fixing the RBAC issue, the reporter logs changed again.
+If this application was going to production, I would improve a few areas.
 
-Instead of the permission error, I started getting:
+- Add CI/CD using GitHub Actions or Jenkins
+- Scan container images before deployment
+- Store secrets using Kubernetes Secrets or an external secret manager
+- Add Horizontal Pod Autoscaler
+- Add PodDisruptionBudget
+- Enable Network Policies
+- Configure proper monitoring and alerting with Prometheus and Grafana
+- Add centralized logging
+- Improve ingress security with TLS and security headers
+- Add automated Helm tests before deployment
 
-```
-parse pod list: unexpected end of JSON input
-```
+These changes would make the application easier to operate and much safer in a production environment.
 
-At the same time, the metrics deployment was still not becoming Ready and the verify script was still reporting a few failed checks.
+#  How I used AI
 
-Because of the assignment time limit, I stopped my investigation here instead of trying random changes.
+I used ChatGPT mainly as a technical troubleshooting assistant whenever I got stuck during the assignment. I did not apply suggestions directly without testing them in my local kind cluster.
 
-If I had more time, my next steps would be:
+Specifically, AI helped me with:
 
-- Check why the reporter is failing to parse the pod list response.
-- Investigate why the metrics deployment is not becoming Ready.
-- Verify the backend health endpoint.
-- Re-run `./scenario.sh verify` after each fix until all checks pass.
-
-Overall, I tried to follow the same approach I would use during a production issue: fix one problem, verify the result, then move on to the next symptom instead of making multiple changes at once.
+Helped me identify the mismatch between the application listening port (8081) and the Kubernetes readiness probe configured for port 8080. Based on that, I added the PORT=8080 environment variable to the reporter deployment.
+Helped me troubleshoot the repeated readiness probe failures by interpreting the output from kubectl describe pod and kubectl logs, instead of guessing from the YAML files.
+Guided me through debugging the RBAC issue after the reporter logs showed 403 Forbidden, including checking the ServiceAccount, Role and RoleBinding, and verifying permissions using kubectl auth can-i.
+Helped me understand why the symptom changed from 403 Forbidden to parse pod list: unexpected end of JSON input, and explained that fixing one issue can expose the next issue in a Kubernetes application.
+Suggested checking the rollout status, pod events and ReplicaSets after updating the Helm chart, which helped me verify whether my changes were actually applied.
